@@ -14,6 +14,7 @@
 # Copyright Buildbot Team Members
 
 import datetime
+import hashlib
 import json
 
 from twisted.internet import defer
@@ -27,6 +28,24 @@ from buildbot.changes import base
 from buildbot.changes.filter import ChangeFilter
 from buildbot.util import bytes2unicode
 from buildbot.util import httpclientservice
+
+def hash_event(event):
+  """
+  Return a sha1 message digest of the canonical json for the given event
+  dictionary
+  """
+
+  # For "patchset-created" the events-log JSON looks like:
+  #   "project": {"name": "buildbot"}
+  # while the stream-events JSON looks like:
+  #   "project": "buildbot"
+  # so we canonicalize them to the latter
+  if ("project" in event and
+      isinstance(event["project"], dict) and
+      "name" in event["project"]):
+    event = dict(event)
+    event["project"] = event["project"]["name"]
+  return hashlib.sha1(json.dumps(event, sort_keys=True).encode("utf-8"))
 
 
 class GerritChangeFilter(ChangeFilter):
@@ -46,7 +65,6 @@ class GerritChangeFilter(ChangeFilter):
         if "branch" in self.checks:
             self.checks["prop:event.change.branch"] = self.checks["branch"]
             del self.checks["branch"]
-
 
 def _gerrit_user_to_author(props, username="unknown"):
     """
@@ -123,6 +141,7 @@ class GerritChangeSourceBase(base.ChangeSource):
 
         properties = {}
         flatten(properties, "event", event)
+        properties["event.source"] = self.__class__.__name__
         event_with_change = "change" in event and "patchSet" in event
         func_name = "eventReceived_%s" % event["type"].replace("-", "_")
         func = getattr(self, func_name, None)
@@ -136,6 +155,14 @@ class GerritChangeSourceBase(base.ChangeSource):
             return func(properties, event)
 
     def addChange(self, chdict):
+        if self.debug:
+          eventstr = "{} -- {}:{}".format(
+              chdict["repository"], chdict["branch"], chdict["revision"])
+          message = (
+              "gerrit: adding change from {} in {}"
+              .format(eventstr, self.__class__.__name__))
+          log.msg(message.encode("utf-8"))
+
         d = self.master.data.updates.addChange(**chdict)
         # eat failures..
         d.addErrback(log.err, 'error adding change from GerritChangeSource')
@@ -154,22 +181,45 @@ class GerritChangeSourceBase(base.ChangeSource):
                               event_change['number'])
         return event_change["branch"]
 
+    @defer.inlineCallbacks
     def addChangeFromEvent(self, properties, event):
+        if "change" not in event:
+            return defer.returnValue(None)
 
-        if "change" in event and "patchSet" in event:
-            event_change = event["change"]
-            return self.addChange({
-                'author': _gerrit_user_to_author(event_change["owner"]),
-                'project': util.bytes2unicode(event_change["project"]),
-                'repository': "{}/{}".format(
-                    self.gitBaseURL, event_change["project"]),
-                'branch': self.getGroupingPolicyFromEvent(event),
-                'revision': event["patchSet"]["revision"],
-                'revlink': event_change["url"],
-                'comments': event_change["subject"],
-                'files': ["unknown"],
-                'category': event["type"],
-                'properties': properties})
+        if "patchSet" not in event:
+            return defer.returnValue(None)
+
+        event_change = event["change"]
+        event_hash = hash_event(event).hexdigest()
+
+        is_new_event = yield (self.master.db.gerriteventhashes
+                              .insertEventHash(event_hash))
+        if not is_new_event:
+            if self.debug:
+                eventstr = "{}/{} -- {}:{}".format(
+                  self.gitBaseURL, event_change["project"],
+                  self.getGroupingPolicyFromEvent(event),
+                  event["patchSet"]["revision"])
+                message = (
+                  "gerrit: duplicate change event {} by {}"
+                  .format(eventstr, self.__class__.__name__))
+                log.msg(message.encode("utf-8"))
+            return defer.returnValue(None)
+
+        cb = yield self.addChange({
+            'author': _gerrit_user_to_author(event_change["owner"]),
+            'project': util.bytes2unicode(event_change["project"]),
+            'repository': "{}/{}".format(
+                self.gitBaseURL, event_change["project"]),
+            'branch': self.getGroupingPolicyFromEvent(event),
+            'revision': event["patchSet"]["revision"],
+            'revlink': event_change["url"],
+            'comments': event_change["subject"],
+            'files': ["unknown"],
+            'category': event["type"],
+            'properties': properties})
+        defer.returnValue(cb)
+
 
     def eventReceived_ref_updated(self, properties, event):
         ref = event["refUpdate"]
@@ -333,12 +383,14 @@ class GerritChangeSource(GerritChangeSourceBase):
 class GerritEventLogPoller(GerritChangeSourceBase):
 
     POLL_INTERVAL_SEC = 30
+    FIRST_FETCH_LOOKBACK_DAYS = 30
 
     def checkConfig(self,
                     baseURL,
                     auth,
                     pollInterval=POLL_INTERVAL_SEC,
                     pollAtLaunch=True,
+                    firstFetchLookback=FIRST_FETCH_LOOKBACK_DAYS,
                     **kwargs):
         if self.name is None:
             self.name = "GerritEventLogPoller:{}".format(baseURL)
@@ -350,6 +402,7 @@ class GerritEventLogPoller(GerritChangeSourceBase):
                         auth,
                         pollInterval=POLL_INTERVAL_SEC,
                         pollAtLaunch=True,
+                        firstFetchLookback=FIRST_FETCH_LOOKBACK_DAYS,
                         **kwargs):
 
         yield super().reconfigService(**kwargs)
@@ -362,6 +415,9 @@ class GerritEventLogPoller(GerritChangeSourceBase):
         self._http = yield httpclientservice.HTTPClientService.getService(
             self.master, baseURL, auth=auth)
 
+        self._first_fetch_lookback = firstFetchLookback
+        self._last_event_time = None
+
     @staticmethod
     def now():
         """patchable now (datetime is not patchable as builtin)"""
@@ -371,10 +427,14 @@ class GerritEventLogPoller(GerritChangeSourceBase):
     def poll(self):
         last_event_ts = yield self.master.db.state.getState(self._oid, 'last_event_ts', None)
         if last_event_ts is None:
-            last_event = self.now()
+            # If there is not last event time stored in the database, then set
+            # the last event time to some historical lookback
+            last_event = self.now() - datetime.timedelta(days=self._first_fetch_lookback)
         else:
             last_event = datetime.datetime.utcfromtimestamp(last_event_ts)
         last_event_formatted = last_event.strftime("%Y-%m-%d %H:%M:%S")
+        if self.debug:
+          log.msg("Polling gerrit: {}".format(last_event_formatted).encode("utf-8"))
         res = yield self._http.get("/plugins/events-log/events/", params=dict(t1=last_event_formatted))
         lines = yield res.content()
         for line in lines.splitlines():

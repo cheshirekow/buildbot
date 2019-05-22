@@ -29,6 +29,7 @@ from buildbot.db import changes
 from buildbot.db import changesources
 from buildbot.db import enginestrategy
 from buildbot.db import exceptions
+from buildbot.db import gerriteventhashes
 from buildbot.db import logs
 from buildbot.db import masters
 from buildbot.db import model
@@ -100,6 +101,7 @@ class DBConnector(service.ReconfigurableServiceMixin,
         self.steps = steps.StepsConnectorComponent(self)
         self.tags = tags.TagsConnectorComponent(self)
         self.logs = logs.LogsConnectorComponent(self)
+        self.gerriteventhashes = gerriteventhashes.GerritEventHashConnectorComponent(self)
 
         self.cleanup_timer = internet.TimerService(self.CLEANUP_PERIOD,
                                                    self._doCleanup)

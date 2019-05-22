@@ -675,6 +675,15 @@ class Model(base.DBConnectorComponent):
         sa.Column('last_active', sa.Integer, nullable=False),
     )
 
+    # gerrit change hashes
+    gerriteventhashes = sautils.Table(
+        "gerrit_event_hashes", metadata,
+        # unique id per change
+        sa.Column('id', sa.Integer, primary_key=True),
+        # sha1sum of the change dictionary
+        sa.Column('event_hash', sa.String(40), nullable=False)
+    )
+
     # indexes
 
     sa.Index('buildrequests_buildsetid', buildrequests.c.buildsetid)
@@ -762,6 +771,8 @@ class Model(base.DBConnectorComponent):
     sa.Index('logs_slug', logs.c.stepid, logs.c.slug, unique=True)
     sa.Index('logchunks_firstline', logchunks.c.logid, logchunks.c.first_line)
     sa.Index('logchunks_lastline', logchunks.c.logid, logchunks.c.last_line)
+    sa.Index('gerriteventhashes_eventhash', gerriteventhashes.c.event_hash,
+             unique=True)
 
     # MySQL creates indexes for foreign keys, and these appear in the
     # reflection.  This is a list of (table, index) names that should be
