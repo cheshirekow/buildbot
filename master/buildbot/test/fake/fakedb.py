@@ -674,12 +674,13 @@ class ConfiguredWorker(Row):
     id_column = 'id'
     required_columns = ('buildermasterid', 'workerid')
 
+
 class GerritEventHash(Row):
     table = "gerrit_event_hashes"
 
     defaults = dict(
-      id=None,
-      event_hash=None,
+        id=None,
+        event_hash=None,
     )
 
     id_column = 'id'
@@ -2497,27 +2498,27 @@ class FakeTagsComponent(FakeDBComponent):
 
 
 class FakeGerritEventHashComponent(FakeDBComponent):
-  def setUp(self):
-    self.hashes = set()
-    self.rows = {}
-    self.last_used_id = 0
+    def setUp(self):
+        self.hashes = set()
+        self.rows = {}
+        self.last_used_id = 0
 
-  def insertEventHash(self, event_hash):
-    if event_hash in self.hashes:
-      return False
+    def insertEventHash(self, event_hash):
+        if event_hash in self.hashes:
+            return False
 
-    self.last_used_id = self.last_used_id + 1
-    row = GerritEventHash(id=self.last_used_id, event_hash=event_hash)
-    self.hashes.add(event_hash)
-    self.rows[row.id] = row
-    return True
-
-  def insertTestData(self, rows):
-    for row in rows:
-      if isinstance(row, GerritEventHash):
+        self.last_used_id = self.last_used_id + 1
+        row = GerritEventHash(id=self.last_used_id, event_hash=event_hash)
+        self.hashes.add(event_hash)
         self.rows[row.id] = row
-        self.hashes.add(row.event_hash)
-        self.last_used_id = max(self.last_used_id, row.id)
+        return True
+
+    def insertTestData(self, rows):
+        for row in rows:
+            if isinstance(row, GerritEventHash):
+                self.rows[row.id] = row
+                self.hashes.add(row.event_hash)
+                self.last_used_id = max(self.last_used_id, row.id)
 
 
 class FakeDBConnector(service.AsyncMultiService):
@@ -2570,7 +2571,6 @@ class FakeDBConnector(service.AsyncMultiService):
         self._components.append(comp)
         self.gerriteventhashes = comp = FakeGerritEventHashComponent(self, testcase)
         self._components.append(comp)
-
 
     def setup(self):
         self.is_setup = True

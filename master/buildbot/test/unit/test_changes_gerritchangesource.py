@@ -292,8 +292,12 @@ class TestGerritEventLogPoller(changesource.ChangeSourceMixin,
         yield self.newChangeSource()
         self.changesource.now = lambda: datetime.datetime.utcfromtimestamp(
             self.NOW_TIMESTAMP)
+        thirty_days_ago = (
+            datetime.datetime.utcfromtimestamp(self.NOW_TIMESTAMP)
+            - datetime.timedelta(days=30))
         self._http.expect(method='get', ep='/plugins/events-log/events/',
-                          params={'t1': self.NOW_FORMATTED},
+                          params={'t1':
+                              thirty_days_ago.strftime("%Y-%m-%d %H:%M:%S")},
                           content_json=dict(
                               type="patchset-created",
                               change=dict(
@@ -312,8 +316,11 @@ class TestGerritEventLogPoller(changesource.ChangeSourceMixin,
         yield self.changesource.poll()
         self.assertEqual(len(self.master.data.updates.changesAdded), 1)
         c = self.master.data.updates.changesAdded[0]
+        expected_change = dict(TestGerritChangeSource.expected_change)
+        expected_change['properties'] = dict(expected_change['properties'])
+        expected_change['properties']['event.source'] = 'GerritEventLogPoller'
         for k, v in c.items():
-            self.assertEqual(TestGerritChangeSource.expected_change[k], v)
+            self.assertEqual(expected_change[k], v)
         self.master.db.state.assertState(
             self.OBJECTID, last_event_ts=self.EVENT_TIMESTAMP)
 

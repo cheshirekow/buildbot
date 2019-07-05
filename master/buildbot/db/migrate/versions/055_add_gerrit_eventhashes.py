@@ -15,7 +15,9 @@
 
 
 import sqlalchemy as sa
+
 from buildbot.util import sautils
+
 
 def upgrade(migrate_engine):
     metadata = sa.MetaData()
