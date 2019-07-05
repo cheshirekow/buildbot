@@ -30,22 +30,30 @@ from buildbot.util import bytes2unicode
 from buildbot.util import httpclientservice
 
 
-def hash_event(event):
+def canonicalize_event(event):
     """
-    Return a sha1 message digest of the canonical json for the given event
-    dictionary
+    Return an event dictionary which is consistent between the gerrit
+    event stream and the gerrit event log formats.
     """
-
     # For "patchset-created" the events-log JSON looks like:
     #   "project": {"name": "buildbot"}
     # while the stream-events JSON looks like:
     #   "project": "buildbot"
     # so we canonicalize them to the latter
-    if ("project" in event and
-            isinstance(event["project"], dict) and
-            "name" in event["project"]):
+    if ("change" in event and "project" in event["change"] and
+            isinstance(event["change"]["project"], dict) and
+            "name" in event["change"]["project"]):
         event = dict(event)
-        event["project"] = event["project"]["name"]
+        event["change"] = dict(event["change"])
+        event["change"]["project"] = event["change"]["project"]["name"]
+    return event
+
+
+def hash_event(event):
+    """
+    Return a sha1 message digest of the canonical json for the given event
+    dictionary
+    """
     return hashlib.sha1(json.dumps(event, sort_keys=True).encode("utf-8"))
 
 
@@ -144,15 +152,10 @@ class GerritChangeSourceBase(base.ChangeSource):
         properties = {}
         flatten(properties, "event", event)
         properties["event.source"] = self.__class__.__name__
-        event_with_change = "change" in event and "patchSet" in event
         func_name = "eventReceived_%s" % event["type"].replace("-", "_")
         func = getattr(self, func_name, None)
-        if func is None and event_with_change:
+        if func is None:
             return self.addChangeFromEvent(properties, event)
-        elif func is None:
-            if self.debug:
-                log.msg("unsupported event %s" % (event["type"],))
-            return defer.succeed(None)
         else:
             return func(properties, event)
 
@@ -186,16 +189,21 @@ class GerritChangeSourceBase(base.ChangeSource):
     @defer.inlineCallbacks
     def addChangeFromEvent(self, properties, event):
         if "change" not in event:
+            if self.debug:
+                log.msg("unsupported event %s" % (event["type"],))
             return defer.returnValue(None)
 
         if "patchSet" not in event:
+            if self.debug:
+                log.msg("unsupported event %s" % (event["type"],))
             return defer.returnValue(None)
 
-        event_change = event["change"]
+        event = canonicalize_event(event)
         event_hash = hash_event(event).hexdigest()
-
         is_new_event = yield (self.master.db.gerriteventhashes
                               .insertEventHash(event_hash))
+
+        event_change = event["change"]
         if not is_new_event:
             if self.debug:
                 eventstr = "{}/{} -- {}:{}".format(

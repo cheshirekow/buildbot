@@ -166,6 +166,63 @@ class TestGerritChangeSource(changesource.ChangeSourceMixin,
         for k, v in c.items():
             self.assertEqual(self.expected_change[k], v)
 
+    @defer.inlineCallbacks
+    def test_duplicate_events_ignored(self):
+        s = self.newChangeSource('somehost', 'someuser')
+        yield s.lineReceived(json.dumps(dict(
+            type="patchset-created",
+            change=dict(
+                branch="br",
+                project="pr",
+                number="4321",
+                owner=dict(name="Dustin", email="dustin@mozilla.com"),
+                url="http://buildbot.net",
+                subject="fix 1234"
+            ),
+            patchSet=dict(revision="abcdef", number="12")
+        )))
+        self.assertEqual(len(self.master.data.updates.changesAdded), 1)
+
+        yield s.lineReceived(json.dumps(dict(
+            type="patchset-created",
+            change=dict(
+                branch="br",
+                # Note that this time "project" is a dictionary
+                project=dict(name="pr"),
+                number="4321",
+                owner=dict(name="Dustin", email="dustin@mozilla.com"),
+                url="http://buildbot.net",
+                subject="fix 1234"
+            ),
+            patchSet=dict(revision="abcdef", number="12")
+        )))
+        self.assertEqual(len(self.master.data.updates.changesAdded), 1)
+
+    @defer.inlineCallbacks
+    def test_malformed_events_ignored(self):
+        s = self.newChangeSource('somehost', 'someuser')
+        # "change" not in event
+        yield s.lineReceived(json.dumps(dict(
+            type="patchset-created",
+            patchSet=dict(revision="abcdef", number="12")
+        )))
+        self.assertEqual(len(self.master.data.updates.changesAdded), 0)
+
+        # "patchSet" not in event
+        yield s.lineReceived(json.dumps(dict(
+            type="patchset-created",
+            change=dict(
+                branch="br",
+                # Note that this time "project" is a dictionary
+                project=dict(name="pr"),
+                number="4321",
+                owner=dict(name="Dustin", email="dustin@mozilla.com"),
+                url="http://buildbot.net",
+                subject="fix 1234"
+            ),
+        )))
+        self.assertEqual(len(self.master.data.updates.changesAdded), 0)
+
     change_merged_event = {
         "type": "change-merged",
         "change": {
