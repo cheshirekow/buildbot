@@ -142,7 +142,8 @@ class TestGerritChangeSource(changesource.ChangeSourceMixin,
                                       'event.change.branch': 'br',
                                       'event.type': 'patchset-created',
                                       'event.patchSet.revision': 'abcdef',
-                                      'event.patchSet.number': '12'}}
+                                      'event.patchSet.number': '12',
+                                      'event.source': 'GerritChangeSource'}}
 
     @defer.inlineCallbacks
     def test_lineReceived_patchset_created(self):
